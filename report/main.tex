@@ -1,0 +1,193 @@
+\documentclass[a4paper,12pt,twoside,english]{all-in-one}
+\usepackage{ebgaramond}
+\usepackage[cmintegrals,cmbraces,ebgaramond]{newtxmath}
+
+\doctitle{CS-C3240 - Machine Learning}
+\docsubtitle{Report Stage 1}
+
+\author{Eppu Ruotsalainen}
+
+\footext{\includegraphics[width=7em]{img/titlepage.png}}
+
+\input{preamble}
+
+\usepackage{lipsum}
+\usepackage{graphicx}
+\usepackage{minted}
+\usepackage{xurl}
+\usepackage{cleveref}
+
+\begin{document}
+
+\setlength{\baselineskip}{.70cm}
+
+\pagestyle{\defaultsettings}
+
+\section{Problem Formulation}
+
+\paragraph{Application as an ML problem.}
+We cast soccer match outcome prediction as a supervised multi-class classification task. For each match \(i\), the input is a feature vector \(\mathbf{x}_i \in \mathbb{R}^d\) and the label is \(y_i \in \{1,2,3\}\) with the class codes \(\{1=\text{AwayWin},\,2=\text{Draw},\,3=\text{HomeWin}\}\). The goal is to learn a predictor \(f \in \mathcal{H}\) that maps \(\mathbf{x} \mapsto \{1,2,3\}\) and minimizes expected classification error under the data-generating distribution.
+
+\paragraph{Data points, features, and labels.}
+\label{features}
+Each data point corresponds to a single historical match. We build \(\mathbf{x}_i\) from pre-match signals that are widely available across leagues and seasons:
+\begin{itemize}
+  \item \textbf{Team strength:} home/away Elo ratings and their difference \(\Delta\text{Elo} := \text{Elo}_{\text{home}} - \text{Elo}_{\text{away}}\).
+  \item \textbf{Recent form:} points from the last \(k\in\{3,5\}\) matches for each team and differences \(\Delta\text{Form}_k\).
+  \item \textbf{Recent scoring profile:} rolling goals for/against over last \(k\) matches and differences \(\Delta\text{GF}_k,\,\Delta\text{GA}_k,\,\Delta\text{GD}_k\).
+  \item \textbf{Shot/discipline proxies:} differences in shots, shots on target, corners, yellow/red cards over last \(k\) matches.
+\end{itemize}
+We exclude any post-match information (e.g., full-time goals) from \(\mathbf{x}_i\) to avoid target leakage. The label \(y_i\) is derived from the full-time result.
+
+\paragraph{Dataset source.}
+We use the public \enquote{Club Football Match Data} repository \citep{xgabora_club_football_2000_2025}, which aggregates club-level match records (2000--2025) from \href{https://football-data.co.uk/}{Football-Data.co.uk} and integrates \href{https://clubelo.com/}{ClubElo} team ratings \cite{football_data_couk,clubelo_website}. The repository provides match dates, teams, full-time results, Elo snapshots, recent form points, and (for most leagues) match statistics and odds; we only use features available before kickoff for prediction.
+
+\section{Methods}
+
+\paragraph{Dataset size and preprocessing.}
+The repository spans \(>\!200{,}000\) matches (2000--2025) across 27 countries \cite{xgabora_club_football_2000_2025}. For Stage~1, we load all available league CSVs, harmonize column names, and retain rows with valid date and full-time result. Preprocessing steps:
+\begin{enumerate}
+  \item \textbf{Selection:} keep columns needed for Elo, form, and optional stats; drop any direct outcome indicators from features.
+  \item \textbf{Feature construction:} compute differences (\(\Delta\)) between home and away signals to encode relative strength and typical home advantage.
+  \item \textbf{Encoding:} map \(\text{AwayWin} \to 1\), \(\text{Draw} \to 2\), \(\text{HomeWin} \to 3\). No scaling is required for tree ensembles.
+\end{enumerate}
+Exact counts for train/validation/test are printed by the \Cref{appendix} script.
+
+\paragraph{Feature selection.}
+We prioritize compact and high-signal features that are broadly available:
+\begin{enumerate}
+  \item Core set: \(\Delta\text{Elo},\,\Delta\text{Form}_3,\,\Delta\text{Form}_5,\,\Delta\text{GF}_5,\,\Delta\text{GA}_5,\,\Delta\text{GD}_5\).
+  \item Optional: \(\Delta\text{Shots}_5,\,\Delta\text{SoT}_5,\,\Delta\text{Corners}_5,\,\Delta\text{YC}_5,\,\Delta\text{RC}_5\).
+  \item Remove highly sparse or redundant features after simple exploratory data analysis (TBD).
+\end{enumerate}
+Features are explained more thoroughly in \Cref{features}.
+
+\paragraph{Model/hypothesis space and motivation.}
+We'll use a Random Forest classifier \cite{breiman2001randomforests} implemented via scikit-learn \cite{pedregosa2011scikitlearn}. The hypothesis space \(\mathcal{H}\) is the majority vote of many decision trees learned on bootstrap resamples with feature sub-sampling. This choice is motivated by:
+\begin{itemize}
+  \item ability to model non-linearities and feature interactions (e.g., strength \(\times\) form) without manual interaction terms,
+  \item robustness to heterogeneous feature scales and outliers,
+  \item variance reduction via ensembling compared to a single tree,
+  \item post-hoc interpretability through feature importance (impurity or permutation) to sanity-check drivers (e.g., \(\Delta\)Elo).
+\end{itemize}
+
+\paragraph{Training criterion and evaluation.}
+Each tree is grown by greedy minimization of node impurity (we'll use Gini impurity) and the forest aggregates votes \cite{breiman2001randomforests}. For evaluation, we'll report accuracy and macro-F1 along with a confusion matrix to balance attention across the three classes (draws are typically underrepresented).
+
+\paragraph{Validation protocol and set sizes.}
+To respect temporal order and avoid leakage, we perform a chronological split by season:
+\[
+\text{Train: } 2000\text{--}2022,\quad
+\text{Validation: } 2023,\quad
+\text{Test: } 2024.
+\]
+This yields an \(\approx\)80/10/10 partition (exact counts printed by the script). Chronological validation mirrors deployment (predicting future from past). Hyperparameters (e.g., number of trees, max depth, max features) will be tuned on the 2023 validation set; the 2024 set remains held out for final reporting.
+
+\clearpage
+\pagestyle{\auxsettings}
+\printbibliography[heading=bibintoc]
+
+\clearpage
+\pagestyle{\defaultsettings}
+\appendix
+\section{Appendix: Code (load data, preprocess and split chronologically)}
+\label{appendix}
+\begin{minted}[fontsize=\footnotesize, breaklines]{python}
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+DATA_DIR = Path("external/Club-Football-Match-Data-2000-2025")
+MATCHES_CSV = DATA_DIR / "data" / "MATCHES.csv"
+
+def main():
+    if not MATCHES_CSV.exists():
+        raise FileNotFoundError(f"Missing {MATCHES_CSV}. Clone the dataset into external/.")
+
+    # Read once; disable low_memory for mixed-type columns
+    df = pd.read_csv(MATCHES_CSV, low_memory=False)
+
+    # Schema sanity check
+    must_have = ["MatchDate", "FTResult", "HomeTeam", "AwayTeam"]
+    missing = [c for c in must_have if c not in df.columns]
+    if missing:
+        raise RuntimeError(f"MATCHES.csv missing required columns: {missing}")
+
+    # Keep only the columns we need (use .get so code doesn't break if some stats are absent)
+    X = pd.DataFrame({
+        "date":      pd.to_datetime(df["MatchDate"], errors="coerce"),
+        "home":      df["HomeTeam"],
+        "away":      df["AwayTeam"],
+        "result":    df["FTResult"].astype(str).str.upper(),
+        "elo_h":     df.get("HomeElo"),
+        "elo_a":     df.get("AwayElo"),
+        "form3_h":   df.get("Form3Home"),
+        "form3_a":   df.get("Form3Away"),
+        "form5_h":   df.get("Form5Home"),
+        "form5_a":   df.get("Form5Away"),
+        "shots_h":   df.get("HomeShots"),
+        "shots_a":   df.get("AwayShots"),
+        "sot_h":     df.get("HomeTarget"),
+        "sot_a":     df.get("AwayTarget"),
+        "corners_h": df.get("HomeCorners"),
+        "corners_a": df.get("AwayCorners"),
+        "yc_h":      df.get("HomeYellow"),
+        "yc_a":      df.get("AwayYellow"),
+        "rc_h":      df.get("HomeRed"),
+        "rc_a":      df.get("AwayRed"),
+        "season":    df.get("Season"),
+        "league":    df.get("Division"),
+    }).dropna(subset=["date", "result"])
+
+    # Encode y in {1,2,3} = {AwayWin, Draw, HomeWin}
+    map_features = {"A": 1, "D": 2, "H": 3}
+    X["y"] = X["result"].map(map_features).astype("Int64")
+    X = X.dropna(subset=["y"])
+
+    # Helper: safe numeric conversion
+    def fnum(s): 
+        return pd.to_numeric(s, errors="coerce")
+
+    # Difference features (home - away), only from pre-match info
+    X["d_elo"]   = fnum(X["elo_h"])   - fnum(X["elo_a"])
+    X["d_form3"] = fnum(X["form3_h"]) - fnum(X["form3_a"])
+    X["d_form5"] = fnum(X["form5_h"]) - fnum(X["form5_a"])
+    # Add difference features only if both sides are present
+    for h, a, n in [
+        ("shots_h","shots_a","d_shots"),
+        ("sot_h","sot_a","d_sot"),
+        ("corners_h","corners_a","d_corners"),
+        ("yc_h","yc_a","d_yc"),
+        ("rc_h","rc_a","d_rc"),
+    ]:
+        if h in X and a in X:
+            X[n] = fnum(X[h]) - fnum(X[a])
+
+    # Year for chronological split (prefer season if present)
+    if X["season"].notna().any():
+        year = X["season"].astype(str).str.extract(r"(\d{4})")[0]
+        X["year"] = pd.to_numeric(year, errors="coerce").fillna(X["date"].dt.year).astype(int)
+    else:
+        X["year"] = X["date"].dt.year.astype(int)
+
+    train      = X[X["year"] <= 2022]
+    validation = X[X["year"] == 2023]
+    test       = X[X["year"] == 2024]
+
+    feature_cols = [c for c in X.columns if c.startswith("d_")]
+
+    print("Total usable matches:", len(X))
+    print("Train/Validation/Test:", len(train), len(validation), len(test))
+    print("Train class balance:", train["y"].value_counts(normalize=True).sort_index().to_dict())
+    print("Features used:", feature_cols)
+
+    # Save a thin CSV for inspection
+    out_cols = ["date","home","away","y","year"] + feature_cols
+    Path("data").mkdir(exist_ok=True, parents=True)
+    X[out_cols].to_csv("data/stage1_features.csv", index=False)
+
+if __name__ == "__main__":
+    main()
+\end{minted}
+
+\end{document}

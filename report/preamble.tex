@@ -1,0 +1,52 @@
+\RequirePackage[style=english]{csquotes}
+\RequirePackage[
+backend=biber,
+style=numeric,
+natbib=true,
+sorting=none
+]{biblatex}
+\newcommand{\familynameformat}[1]{\MakeUppercase{#1}}
+\AtBeginBibliography{%
+  \renewcommand{\mkbibnamefamily}{\familynameformat}%
+}
+\renewbibmacro*{begentry}{%
+  \iffieldundef{note}
+    {\undef\bbxnote}
+    {\savefield{note}{\bbxnote}%
+     \clearfield{note}}}
+\renewbibmacro*{finentry}{%
+  \restorefield{note}{\bbxnote}%
+  \iffieldundef{note}
+    {\finentry}
+    {\setunit{\finentrypunct\par\vspace{\bibitemsep}\nobreak}
+     \textit{\printfield{note}}%
+     \finentry}}
+\let\familynameformat=\textsc
+\nocite{*}
+
+\addbibresource{bibl.bib}
+\setlength\bibitemsep{4.0\itemsep}
+
+\RequirePackage{hyperref}
+\makeatletter
+\hypersetup{%
+  hidelinks,%
+  pdfstartview=Fit,%
+  pdfmenubar=true,%
+  pdftoolbar=true,%
+  bookmarksopen=false,%
+  pdfdisplaydoctitle=true,%
+  unicode=true,%
+  pdfencoding=unicode,%
+  pdftitle={\@docsubtitle},%
+  pdfauthor={Eppu Ruotsalainen},%
+  pdfsubject={\@doctitle},%
+  pdflang={\languagename},%
+  pdfkeywords={Computer Science and Engineering},%
+  pdfproducer={pdfTeX}}
+\makeatother
+
+\makeatletter%
+\title{{\large\textit{\@doctitle}}\\[0.5cm]{\Huge\color{gray}\textsc{\@docsubtitle}}}%
+\makeatother%
+\date{\today}
